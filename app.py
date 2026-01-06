@@ -495,6 +495,42 @@ with gr.Blocks(
     """)
     
     with gr.Tabs():
+        # Submission Guide Tab
+        with gr.TabItem("How to Submit"):
+            gr.Markdown(f"""
+            ### Submitting Your Model
+            
+            1. **Train your model** using the [Chess Challenge Template](https://github.com/nathanael-fijalkow/ChessChallengeTemplate)
+            
+            2. **Push to Hugging Face Hub**:
+            ```python
+            from chess_challenge import ChessForCausalLM, ChessTokenizer
+            
+            # After training
+            model.push_to_hub("your-model-name", organization="{ORGANIZATION}")
+            tokenizer.push_to_hub("your-model-name", organization="{ORGANIZATION}")
+            ```
+            
+            3. **Verify your submission** by checking the model page on Hugging Face
+            
+            4. **Run evaluations**:
+               - First: **Legal Move Eval** (quick sanity check)
+               - Then: **Win Rate Eval** (full ELO computation)
+            
+            ### Requirements
+            
+            - Model must be under **1M parameters**
+            - Model must use the `ChessConfig` and `ChessForCausalLM` classes
+            - Include the tokenizer with your submission
+            
+            ### Tips for Better Performance
+            
+            - Experiment with different architectures (layers, heads, dimensions)
+            - Try weight tying to save parameters
+            - Fine-tune on high-quality games only
+            - Use RL fine-tuning with Stockfish rewards
+            """)
+        
         # Leaderboard Tab
         with gr.TabItem("🏆 Leaderboard"):
             gr.Markdown("### Current Rankings")
@@ -622,42 +658,6 @@ with gr.Blocks(
                 inputs=[eval_model, eval_level, eval_games],
                 outputs=eval_results,
             )
-        
-        # Submission Guide Tab
-        with gr.TabItem("How to Submit"):
-            gr.Markdown(f"""
-            ### Submitting Your Model
-            
-            1. **Train your model** using the Chess Challenge template
-            
-            2. **Push to Hugging Face Hub**:
-            ```python
-            from chess_challenge import ChessForCausalLM, ChessTokenizer
-            
-            # After training
-            model.push_to_hub("your-model-name", organization="{ORGANIZATION}")
-            tokenizer.push_to_hub("your-model-name", organization="{ORGANIZATION}")
-            ```
-            
-            3. **Verify your submission** by checking the model page on Hugging Face
-            
-            4. **Run evaluations**:
-               - First: **Legal Move Eval** (quick sanity check)
-               - Then: **Win Rate Eval** (full ELO computation)
-            
-            ### Requirements
-            
-            - Model must be under **1M parameters**
-            - Model must use the `ChessConfig` and `ChessForCausalLM` classes
-            - Include the tokenizer with your submission
-            
-            ### Tips for Better Performance
-            
-            - Experiment with different architectures (layers, heads, dimensions)
-            - Try weight tying to save parameters
-            - Fine-tune on high-quality games only
-            - Use RL fine-tuning with Stockfish rewards
-            """)
 
 
 if __name__ == "__main__":

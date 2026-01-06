@@ -14,6 +14,8 @@ license: mit
 
 This Space hosts the evaluation arena for the LLM Chess Challenge.
 
+**Chess Challenge Template**: https://github.com/nathanael-fijalkow/ChessChallengeTemplate
+
 ## Features
 
 - **Interactive Demo**: Test any submitted model against Stockfish
