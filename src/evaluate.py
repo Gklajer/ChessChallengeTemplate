@@ -477,9 +477,11 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     Returns:
         Tuple of (model, tokenizer).
     """
+    import json
+    from huggingface_hub import hf_hub_download
     from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
     
-    # Import custom classes - this also triggers registration at module load
+    # Import custom classes
     try:
         from src.model import ChessConfig, ChessForCausalLM
         from src.tokenizer import ChessTokenizer
@@ -487,31 +489,40 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
         from .model import ChessConfig, ChessForCausalLM
         from .tokenizer import ChessTokenizer
     
-    # Explicitly register to ensure it's done before loading
+    # Register BEFORE any from_pretrained calls
     try:
         AutoConfig.register("chess_transformer", ChessConfig)
     except ValueError:
-        pass  # Already registered
-    
+        pass
     try:
         AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
     except ValueError:
-        pass  # Already registered
+        pass
     
-    # Load using our local classes directly (most reliable)
     print(f"Loading model {model_id}...")
-    config = ChessConfig.from_pretrained(model_id, trust_remote_code=True)
+    
+    # Download and load config manually to avoid transformers auto-detection issues
+    config_path = hf_hub_download(repo_id=model_id, filename="config.json")
+    with open(config_path, "r") as f:
+        config_dict = json.load(f)
+    
+    # Remove model_type to avoid conflicts, instantiate our config directly
+    config_dict.pop("model_type", None)
+    config_dict.pop("architectures", None)
+    config = ChessConfig(**config_dict)
+    
+    # Load model weights with our config
     model = ChessForCausalLM.from_pretrained(
         model_id,
         config=config,
         device_map=device,
-        trust_remote_code=True,
     )
     
-    # Load tokenizer - try custom class first, then generic
+    # Load tokenizer
     try:
         tokenizer = ChessTokenizer.from_pretrained(model_id)
-    except Exception:
+    except Exception as e:
+        print(f"ChessTokenizer failed ({e}), trying AutoTokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     
     return model, tokenizer

@@ -281,7 +281,7 @@ def play_move(
             render_board_svg(current_fen if current_fen != "startpos" else None),
             current_fen,
             move_history,
-            f"⚠️ Model generated illegal move: {move_token}",
+            f"Model generated illegal move: {move_token}",
         )
         
     except Exception as e:
@@ -289,7 +289,7 @@ def play_move(
             render_board_svg(),
             "startpos",
             "",
-            f"❌ Error: {str(e)}",
+            f"Error: {str(e)}",
         )
 
 
@@ -543,7 +543,7 @@ with gr.Blocks(
         with gr.TabItem("🏆 Leaderboard"):
             gr.Markdown("### Current Rankings")
             leaderboard_html = gr.HTML(value=format_leaderboard_html(load_leaderboard()))
-            refresh_btn = gr.Button("🔄 Refresh Leaderboard")
+            refresh_btn = gr.Button("Refresh Leaderboard")
             refresh_btn.click(refresh_leaderboard, outputs=leaderboard_html)
         
         # Interactive Demo Tab
@@ -566,8 +566,8 @@ with gr.Blocks(
                     )
                     
                     with gr.Row():
-                        play_btn = gr.Button("▶️ Model Move", variant="primary")
-                        reset_btn = gr.Button("🔄 Reset")
+                        play_btn = gr.Button("Model Move", variant="primary")
+                        reset_btn = gr.Button("Reset")
                     
                     status_text = gr.Textbox(label="Status", interactive=False)
                 
@@ -618,7 +618,7 @@ with gr.Blocks(
                     label="Number of Positions",
                 )
             
-            legal_btn = gr.Button("✅ Run Legal Move Evaluation", variant="primary")
+            legal_btn = gr.Button("Run Legal Move Evaluation", variant="primary")
             legal_results = gr.Markdown()
             
             legal_btn.click(
@@ -675,7 +675,7 @@ with gr.Blocks(
 def verify_webhook_secret(secret: str) -> bool:
     """Verify the webhook secret from Hugging Face."""
     if not WEBHOOK_SECRET:
-        print("⚠️ WEBHOOK_SECRET not set - skipping verification")
+        print("WEBHOOK_SECRET not set - skipping verification")
         return True
     return hmac.compare_digest(WEBHOOK_SECRET, secret)
 
@@ -714,10 +714,10 @@ def run_auto_evaluation(model_id: str):
         })
         
         save_leaderboard(leaderboard)
-        print(f"✅ Auto-evaluation complete for {model_id}: legal_rate={results.get('legal_rate_with_retry', 0):.1%}")
+        print(f"Auto-evaluation complete for {model_id}: legal_rate={results.get('legal_rate_with_retry', 0):.1%}")
         
     except Exception as e:
-        print(f"❌ Auto-evaluation failed for {model_id}: {e}")
+        print(f"Auto-evaluation failed for {model_id}: {e}")
         import traceback
         traceback.print_exc()
 
@@ -729,7 +729,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     
     # Verify secret
     if not verify_webhook_secret(secret):
-        print("❌ Webhook secret verification failed")
+        print("Webhook secret verification failed")
         return {"error": "Invalid secret"}, 403
     
     data = await request.json()
@@ -746,7 +746,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
         if event_type in ["create", "update"]:
             # Check if it's a chess model
             if "chess" in repo_name.lower():
-                print(f"🎯 Queuing evaluation for chess model: {repo_name}")
+                print(f"Queuing evaluation for chess model: {repo_name}")
                 background_tasks.add_task(run_auto_evaluation, repo_name)
                 return {"status": "evaluation_queued", "model": repo_name}
             else:
