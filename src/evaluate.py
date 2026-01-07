@@ -479,39 +479,40 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     """
     from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
     
-    # Import and register custom classes
+    # Import custom classes - this also triggers registration at module load
     try:
         from src.model import ChessConfig, ChessForCausalLM
+        from src.tokenizer import ChessTokenizer
     except ImportError:
         from .model import ChessConfig, ChessForCausalLM
+        from .tokenizer import ChessTokenizer
     
-    # Explicitly register in case it wasn't done yet
+    # Explicitly register to ensure it's done before loading
     try:
         AutoConfig.register("chess_transformer", ChessConfig)
+    except ValueError:
+        pass  # Already registered
+    
+    try:
         AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
     except ValueError:
-        # Already registered
-        pass
+        pass  # Already registered
     
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    # Load using our local classes directly (most reliable)
+    print(f"Loading model {model_id}...")
+    config = ChessConfig.from_pretrained(model_id, trust_remote_code=True)
+    model = ChessForCausalLM.from_pretrained(
+        model_id,
+        config=config,
+        device_map=device,
+        trust_remote_code=True,
+    )
     
-    # Load model - try with trust_remote_code first, then without
+    # Load tokenizer - try custom class first, then generic
     try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            device_map=device,
-        )
-    except Exception as e:
-        print(f"Loading with trust_remote_code failed ({e}), trying local classes...")
-        # Load config and model using our local classes
-        config = ChessConfig.from_pretrained(model_id)
-        model = ChessForCausalLM.from_pretrained(
-            model_id,
-            config=config,
-            device_map=device,
-        )
+        tokenizer = ChessTokenizer.from_pretrained(model_id)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     
     return model, tokenizer
 
