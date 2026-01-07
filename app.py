@@ -672,13 +672,12 @@ with gr.Blocks(
 # WEBHOOK HANDLERS FOR AUTOMATIC EVALUATION
 # =============================================================================
 
-def verify_webhook_signature(payload: bytes, signature: str) -> bool:
-    """Verify the webhook signature from Hugging Face."""
+def verify_webhook_secret(secret: str) -> bool:
+    """Verify the webhook secret from Hugging Face."""
     if not WEBHOOK_SECRET:
-        print("⚠️ WEBHOOK_SECRET not set - skipping signature verification")
+        print("⚠️ WEBHOOK_SECRET not set - skipping verification")
         return True
-    expected = hmac.new(WEBHOOK_SECRET.encode(), payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", signature)
+    return hmac.compare_digest(WEBHOOK_SECRET, secret)
 
 
 def run_auto_evaluation(model_id: str):
@@ -726,13 +725,12 @@ def run_auto_evaluation(model_id: str):
 @fastapi_app.post("/webhook")
 async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming webhooks from Hugging Face."""
-    payload = await request.body()
-    signature = request.headers.get("X-Webhook-Signature", "")
+    secret = request.headers.get("X-Webhook-Secret", "")
     
-    # Verify signature
-    if not verify_webhook_signature(payload, signature):
-        print("❌ Webhook signature verification failed")
-        return {"error": "Invalid signature"}, 403
+    # Verify secret
+    if not verify_webhook_secret(secret):
+        print("❌ Webhook secret verification failed")
+        return {"error": "Invalid secret"}, 403
     
     data = await request.json()
     event = data.get("event", {})
