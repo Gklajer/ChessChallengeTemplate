@@ -155,11 +155,12 @@ class ChessEvaluator:
             input_text = self.tokenizer.bos_token + " " + moves_str
         
         # Tokenize
+        max_len = getattr(self.model.config, 'n_ctx', None) or getattr(self.model.config, 'max_position_embeddings', 256)
         inputs = self.tokenizer(
             input_text,
             return_tensors="pt",
             truncation=True,
-            max_length=self.model.config.n_ctx - 1,
+            max_length=max_len - 1,
         ).to(self.device)
         
         # Try to generate a legal move
@@ -476,20 +477,41 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     Returns:
         Tuple of (model, tokenizer).
     """
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
     
-    # Import to register custom classes (use relative import or handle both cases)
+    # Import and register custom classes
     try:
         from src.model import ChessConfig, ChessForCausalLM
     except ImportError:
         from .model import ChessConfig, ChessForCausalLM
     
+    # Explicitly register in case it wasn't done yet
+    try:
+        AutoConfig.register("chess_transformer", ChessConfig)
+        AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
+    except ValueError:
+        # Already registered
+        pass
+    
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        device_map=device,
-    )
+    
+    # Load model - try with trust_remote_code first, then without
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            device_map=device,
+        )
+    except Exception as e:
+        print(f"Loading with trust_remote_code failed ({e}), trying local classes...")
+        # Load config and model using our local classes
+        config = ChessConfig.from_pretrained(model_id)
+        model = ChessForCausalLM.from_pretrained(
+            model_id,
+            config=config,
+            device_map=device,
+        )
     
     return model, tokenizer
 
