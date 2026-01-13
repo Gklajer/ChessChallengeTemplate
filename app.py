@@ -1,10 +1,14 @@
 """
-Chess Challenge Arena - Hugging Face Space
+Play Chess like a Honey Bee
 
 This Gradio app provides:
 1. Interactive demo to test models
 2. Leaderboard of submitted models
 3. Live game visualization
+
+Instructions:
+The goal is to train a language model to play chess, under a strict constraint:
+less than 1M parameters! This is approximately the number of neurons of a honey bee.
 
 Leaderboard data is stored in a private HuggingFace dataset for persistence.
 """
@@ -45,7 +49,7 @@ LEADERBOARD_COLUMNS = [
     "legal_rate",
     "legal_rate_first_try",
     "elo",
-    "win_rate",
+    # "win_rate",
     "draw_rate",
     "games_played",
     "last_updated",
@@ -170,7 +174,7 @@ def format_leaderboard_html(data: list) -> str:
                 <th>Model</th>
                 <th>Legal Rate</th>
                 <th>ELO</th>
-                <th>Win Rate</th>
+                <!-- <th>Win Rate</th> -->
                 <th>Games</th>
                 <th>Last Updated</th>
             </tr>
@@ -199,7 +203,7 @@ def format_leaderboard_html(data: list) -> str:
                 <td><a href="{model_url}" target="_blank" class="model-link">{entry['model_id'].split('/')[-1]}</a></td>
                 <td class="{legal_class}">{legal_rate*100:.1f}%</td>
                 <td><strong>{entry.get('elo', 'N/A'):.0f}</strong></td>
-                <td>{entry.get('win_rate', 0)*100:.1f}%</td>
+                <!-- <td>{entry.get('win_rate', 0)*100:.1f}%</td> -->
                 <td>{entry.get('games_played', 0)}</td>
                 <td>{entry.get('last_updated', 'N/A')}</td>
             </tr>
@@ -492,14 +496,16 @@ def refresh_leaderboard() -> str:
 
 # Build Gradio Interface
 with gr.Blocks(
-    title="Chess Challenge Arena",
+    title="Play Chess like a Honey Bee",
     theme=gr.themes.Soft(),
 ) as demo:
     gr.Markdown("""
-    # ♟️ Chess Challenge Arena
+    # 🐝 Play Chess like a Honey Bee
     
-    Welcome to the LLM Chess Challenge evaluation arena! 
-    Test your models, see the leaderboard, and compete with your classmates.
+    Welcome to the Chess Challenge! The goal is to train a language model to play chess,
+    under a strict constraint: **less than 1M parameters!**
+    
+    This is approximately the number of neurons of a honey bee 🐝
     """)
     
     with gr.Tabs():
@@ -538,13 +544,6 @@ with gr.Blocks(
             - Fine-tune on high-quality games only
             - Use RL fine-tuning with Stockfish rewards
             """)
-        
-        # Leaderboard Tab
-        with gr.TabItem("🏆 Leaderboard"):
-            gr.Markdown("### Current Rankings")
-            leaderboard_html = gr.HTML(value=format_leaderboard_html(load_leaderboard()))
-            refresh_btn = gr.Button("Refresh Leaderboard")
-            refresh_btn.click(refresh_leaderboard, outputs=leaderboard_html)
         
         # Interactive Demo Tab
         with gr.TabItem("🎮 Interactive Demo"):
@@ -627,45 +626,52 @@ with gr.Blocks(
                 outputs=legal_results,
             )
         
-        # Win Rate Evaluation Tab
-        with gr.TabItem("🏆 Win Rate Eval"):
-            gr.Markdown("""
-            ### Phase 2: Win Rate Evaluation
-            
-            Play full games against Stockfish and measure win rate.
-            This evaluation computes your model's **ELO rating**.
-            
-            - Plays complete games against Stockfish
-            - Measures win/draw/loss rates
-            - Estimates ELO rating
-            """)
-            
-            with gr.Row():
-                eval_model = gr.Dropdown(
-                    choices=get_available_models(),
-                    label="Model to Evaluate",
-                )
-                eval_level = gr.Dropdown(
-                    choices=list(STOCKFISH_LEVELS.keys()),
-                    value="Easy (Level 1)",
-                    label="Stockfish Level",
-                )
-                eval_games = gr.Slider(
-                    minimum=10,
-                    maximum=100,
-                    value=50,
-                    step=10,
-                    label="Number of Games",
-                )
-            
-            eval_btn = gr.Button("Run Win Rate Evaluation", variant="primary")
-            eval_results = gr.Markdown()
-            
-            eval_btn.click(
-                evaluate_winrate,
-                inputs=[eval_model, eval_level, eval_games],
-                outputs=eval_results,
-            )
+        # Win Rate Evaluation Tab (commented out for now)
+        # with gr.TabItem("🏆 Win Rate Eval"):
+        #     gr.Markdown("""
+        #     ### Phase 2: Win Rate Evaluation
+        #     
+        #     Play full games against Stockfish and measure win rate.
+        #     This evaluation computes your model's **ELO rating**.
+        #     
+        #     - Plays complete games against Stockfish
+        #     - Measures win/draw/loss rates
+        #     - Estimates ELO rating
+        #     """)
+        #     
+        #     with gr.Row():
+        #         eval_model = gr.Dropdown(
+        #             choices=get_available_models(),
+        #             label="Model to Evaluate",
+        #         )
+        #         eval_level = gr.Dropdown(
+        #             choices=list(STOCKFISH_LEVELS.keys()),
+        #             value="Easy (Level 1)",
+        #             label="Stockfish Level",
+        #         )
+        #         eval_games = gr.Slider(
+        #             minimum=10,
+        #             maximum=100,
+        #             value=50,
+        #             step=10,
+        #             label="Number of Games",
+        #         )
+        #     
+        #     eval_btn = gr.Button("Run Win Rate Evaluation", variant="primary")
+        #     eval_results = gr.Markdown()
+        #     
+        #     eval_btn.click(
+        #         evaluate_winrate,
+        #         inputs=[eval_model, eval_level, eval_games],
+        #         outputs=eval_results,
+        #     )
+        
+        # Leaderboard Tab (moved to the end)
+        with gr.TabItem("🏆 Leaderboard"):
+            gr.Markdown("### Current Rankings")
+            leaderboard_html = gr.HTML(value=format_leaderboard_html(load_leaderboard()))
+            refresh_btn = gr.Button("Refresh Leaderboard")
+            refresh_btn.click(refresh_leaderboard, outputs=leaderboard_html)
 
 
 # =============================================================================

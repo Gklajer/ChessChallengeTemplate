@@ -506,9 +506,13 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     with open(config_path, "r") as f:
         config_dict = json.load(f)
     
-    # Remove model_type to avoid conflicts, instantiate our config directly
+    # Remove fields that are not in ChessConfig to avoid unexpected kwargs
     config_dict.pop("model_type", None)
     config_dict.pop("architectures", None)
+    config_dict.pop("transformers_version", None)
+    config_dict.pop("dtype", None)
+    config_dict.pop("torch_dtype", None)
+    
     config = ChessConfig(**config_dict)
     
     # Load model weights with our config
@@ -518,12 +522,27 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
         device_map=device,
     )
     
-    # Load tokenizer
+    # Load tokenizer - try to find vocab.json, else build default
     try:
         tokenizer = ChessTokenizer.from_pretrained(model_id)
     except Exception as e:
-        print(f"ChessTokenizer failed ({e}), trying AutoTokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        print(f"ChessTokenizer.from_pretrained failed: {e}")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        except Exception as e2:
+            print(f"AutoTokenizer also failed: {e2}")
+            print("Creating default tokenizer with vocab_size from config...")
+            # Create a minimal tokenizer with just the vocab size
+            tokenizer = ChessTokenizer()
+            # Ensure vocab size matches model
+            if hasattr(config, 'vocab_size'):
+                # Build a placeholder vocab of the right size
+                tokenizer._vocab = {f"[MOVE_{i}]": i for i in range(config.vocab_size)}
+                tokenizer._vocab["[PAD]"] = 0
+                tokenizer._vocab["[BOS]"] = 1
+                tokenizer._vocab["[EOS]"] = 2
+                tokenizer._vocab["[UNK]"] = 3
+                tokenizer._ids_to_tokens = {v: k for k, v in tokenizer._vocab.items()}
     
     return model, tokenizer
 
@@ -537,7 +556,7 @@ def main():
         help="Path to the model or Hugging Face model ID"
     )
     parser.add_argument(
-        "--mode", type=str, default="both", choices=["legal", "winrate", "both"],
+        "--mode", type=str, default="legal", choices=["legal", "winrate", "both"],
         help="Evaluation mode: 'legal' for legal move rate, 'winrate' for games, 'both' for both"
     )
     parser.add_argument(
