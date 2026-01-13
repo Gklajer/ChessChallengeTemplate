@@ -300,6 +300,7 @@ class ChessEvaluator:
         n_positions: int = 1000,
         temperature: float = 0.7,
         verbose: bool = True,
+        seed: int = 42,
     ) -> dict:
         """
         Evaluate the model's ability to generate legal moves.
@@ -311,10 +312,14 @@ class ChessEvaluator:
             n_positions: Number of positions to test.
             temperature: Sampling temperature.
             verbose: Whether to print progress.
+            seed: Random seed for reproducibility.
         
         Returns:
             Dictionary with legal move statistics.
         """
+        # Set seed for deterministic evaluation
+        random.seed(seed)
+        
         results = {
             "total_positions": 0,
             "legal_first_try": 0,

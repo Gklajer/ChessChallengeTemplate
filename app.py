@@ -307,6 +307,42 @@ def play_move(
         )
 
 
+def get_model_submitter(model_id: str) -> Optional[str]:
+    """Extract the submitter's username from the model's README on HuggingFace.
+    
+    Returns None if the submitter cannot be determined.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+        import re
+        
+        # Download the README.md from the model repo
+        readme_path = hf_hub_download(
+            repo_id=model_id,
+            filename="README.md",
+            token=HF_TOKEN,
+        )
+        
+        with open(readme_path, "r") as f:
+            readme_content = f.read()
+        
+        # Look for the pattern: **Submitted by**: [username](https://huggingface.co/username)
+        match = re.search(r'\*\*Submitted by\*\*:\s*\[([^\]]+)\]', readme_content)
+        if match:
+            return match.group(1)
+        
+        # Fallback: try to get from model info
+        from huggingface_hub import model_info
+        info = model_info(model_id, token=HF_TOKEN)
+        if info.author:
+            return info.author
+            
+    except Exception as e:
+        print(f"Could not extract submitter from model: {e}")
+    
+    return None
+
+
 def evaluate_legal_moves(
     model_id: str,
     n_positions: int,
@@ -332,8 +368,16 @@ def evaluate_legal_moves(
         progress(0.2, desc=f"Testing {n_positions} positions...")
         results = evaluator.evaluate_legal_moves(n_positions=n_positions, verbose=False)
         
-        # Extract user_id from model_id (format: user_id/model_name)
-        user_id = model_id.split('/')[0] if '/' in model_id else 'unknown'
+        # Extract user_id from model's README (submitted by field)
+        user_id = get_model_submitter(model_id)
+        if user_id is None:
+            return f"""## Evaluation Failed
+
+Could not determine the submitter for model `{model_id}`.
+
+Please ensure your model was submitted using the official submission script (`submit.py`), 
+which adds the required metadata to the README.md file.
+"""
         
         # Update leaderboard - only if improved
         leaderboard = load_leaderboard()
@@ -579,62 +623,62 @@ with gr.Blocks(
             - Try weight tying to save parameters
             """)
         
-        # Interactive Demo Tab
-        with gr.TabItem("🎮 Interactive Demo"):
-            gr.Markdown("### Test a Model")
-            
-            with gr.Row():
-                with gr.Column(scale=1):
-                    with gr.Row():
-                        model_dropdown = gr.Dropdown(
-                            choices=get_available_models(),
-                            label="Select Model",
-                            value=None,
-                            scale=4,
-                        )
-                        refresh_models_btn = gr.Button("🔄", scale=1)
-                    temperature_slider = gr.Slider(
-                        minimum=0.1,
-                        maximum=2.0,
-                        value=0.7,
-                        step=0.1,
-                        label="Temperature",
-                    )
-                    
-                    with gr.Row():
-                        play_btn = gr.Button("Model Move", variant="primary")
-                        reset_btn = gr.Button("Reset")
-                    
-                    status_text = gr.Textbox(label="Status", interactive=False)
-                
-                with gr.Column(scale=1):
-                    board_display = gr.HTML(value=render_board_svg())
-            
-            # Hidden state
-            current_fen = gr.State("startpos")
-            move_history = gr.State("")
-            
-            def refresh_models():
-                return gr.update(choices=get_available_models())
-            
-            refresh_models_btn.click(
-                refresh_models,
-                outputs=[model_dropdown],
-            )
-            
-            play_btn.click(
-                play_move,
-                inputs=[model_dropdown, current_fen, move_history, temperature_slider],
-                outputs=[board_display, current_fen, move_history, status_text],
-            )
-            
-            def reset_game():
-                return render_board_svg(), "startpos", "", "Game reset!"
-            
-            reset_btn.click(
-                reset_game,
-                outputs=[board_display, current_fen, move_history, status_text],
-            )
+        # Interactive Demo Tab (commented out for now)
+        # with gr.TabItem("🎮 Interactive Demo"):
+        #     gr.Markdown("### Test a Model")
+        #     
+        #     with gr.Row():
+        #         with gr.Column(scale=1):
+        #             with gr.Row():
+        #                 model_dropdown = gr.Dropdown(
+        #                     choices=get_available_models(),
+        #                     label="Select Model",
+        #                     value=None,
+        #                     scale=4,
+        #                 )
+        #                 refresh_models_btn = gr.Button("🔄", scale=1)
+        #             temperature_slider = gr.Slider(
+        #                 minimum=0.1,
+        #                 maximum=2.0,
+        #                 value=0.7,
+        #                 step=0.1,
+        #                 label="Temperature",
+        #             )
+        #             
+        #             with gr.Row():
+        #                 play_btn = gr.Button("Model Move", variant="primary")
+        #                 reset_btn = gr.Button("Reset")
+        #             
+        #             status_text = gr.Textbox(label="Status", interactive=False)
+        #         
+        #         with gr.Column(scale=1):
+        #             board_display = gr.HTML(value=render_board_svg())
+        #     
+        #     # Hidden state
+        #     current_fen = gr.State("startpos")
+        #     move_history = gr.State("")
+        #     
+        #     def refresh_models():
+        #         return gr.update(choices=get_available_models())
+        #     
+        #     refresh_models_btn.click(
+        #         refresh_models,
+        #         outputs=[model_dropdown],
+        #     )
+        #     
+        #     play_btn.click(
+        #         play_move,
+        #         inputs=[model_dropdown, current_fen, move_history, temperature_slider],
+        #         outputs=[board_display, current_fen, move_history, status_text],
+        #     )
+        #     
+        #     def reset_game():
+        #         return render_board_svg(), "startpos", "", "Game reset!"
+        #     
+        #     reset_btn.click(
+        #         reset_game,
+        #         outputs=[board_display, current_fen, move_history, status_text],
+        #     )
         
         # Legal Move Evaluation Tab
         with gr.TabItem("Legal Move Eval"):
@@ -651,9 +695,8 @@ with gr.Blocks(
                 legal_model = gr.Dropdown(
                     choices=get_available_models(),
                     label="Model to Evaluate",
-                    scale=4,
                 )
-                refresh_legal_models_btn = gr.Button("🔄", scale=1)
+                refresh_legal_models_btn = gr.Button("🔄", scale=0, min_width=40)
                 legal_positions = gr.Slider(
                     minimum=100,
                     maximum=1000,
