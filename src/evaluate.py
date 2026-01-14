@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -23,15 +24,22 @@ class GameResult:
     model_color: str  # "white" or "black"
     termination: str  # "checkmate", "stalemate", "illegal_move", "max_moves", etc.
     illegal_move_count: int
-
-
+ 
+ 
 class ChessEvaluator:
     """
     Evaluator for chess models.
     
     This class handles playing games between a trained model and Stockfish,
     tracking results, and computing ELO ratings.
+    
+    Supports any tokenization format as long as the model generates valid
+    chess squares (e.g., e2, e4). The evaluator extracts UCI moves by finding
+    square patterns in the generated output.
     """
+    
+    # Regex pattern to match chess squares
+    SQUARE_PATTERN = r'[a-h][1-8]'
     
     def __init__(
         self,
@@ -88,10 +96,100 @@ class ChessEvaluator:
         if hasattr(self, 'engine') and self.engine:
             self.engine.quit()
     
+    def _detect_tokenizer_format(self) -> str:
+        """
+        Detect the tokenizer's expected move format by testing tokenization.
+        
+        Tests various formats with a sample move and picks the one that
+        produces the fewest unknown tokens. This makes evaluation work
+        with any tokenizer format.
+        
+        Supported formats:
+        - 'decomposed': "WP e2_f e4_t" (piece, from_suffix, to_suffix)
+        - 'standard': "WPe2e4" (combined with optional annotations)
+        - 'uci': "e2e4" (pure UCI notation)
+        - 'uci_spaced': "e2 e4" (UCI with space separator)
+        
+        Returns:
+            The format string that best matches the tokenizer's vocabulary.
+        """
+        if hasattr(self, '_cached_format'):
+            return self._cached_format
+        
+        # Sample move representations to test
+        test_formats = {
+            'decomposed': "WP e2_f e4_t",
+            'standard': "WPe2e4",
+            'uci': "e2e4",
+            'uci_spaced': "e2 e4",
+        }
+        
+        unk_token_id = getattr(self.tokenizer, 'unk_token_id', None)
+        best_format = 'standard'
+        min_unk_count = float('inf')
+        
+        for fmt, sample in test_formats.items():
+            try:
+                tokens = self.tokenizer.encode(sample, add_special_tokens=False)
+                # Count unknown tokens
+                unk_count = tokens.count(unk_token_id) if unk_token_id is not None else 0
+                # Also penalize if the entire thing became one UNK
+                if len(tokens) == 1 and unk_count == 1:
+                    unk_count = 100  # Heavy penalty
+                
+                if unk_count < min_unk_count:
+                    min_unk_count = unk_count
+                    best_format = fmt
+            except Exception:
+                continue
+        
+        self._cached_format = best_format
+        return best_format
+    
+    def _format_move(self, color: str, piece: str, from_sq: str, to_sq: str, 
+                     promotion: str = None) -> str:
+        """
+        Format a single move according to the detected tokenizer format.
+        
+        Args:
+            color: 'W' or 'B'
+            piece: Piece letter (P, N, B, R, Q, K)
+            from_sq: Source square (e.g., 'e2')
+            to_sq: Destination square (e.g., 'e4')
+            promotion: Promotion piece letter or None
+        
+        Returns:
+            Formatted move string.
+        """
+        fmt = self._detect_tokenizer_format()
+        
+        if fmt == 'decomposed':
+            move_str = f"{color}{piece} {from_sq}_f {to_sq}_t"
+        elif fmt == 'uci':
+            move_str = f"{from_sq}{to_sq}"
+            if promotion:
+                move_str += promotion.lower()
+        elif fmt == 'uci_spaced':
+            move_str = f"{from_sq} {to_sq}"
+            if promotion:
+                move_str += f" {promotion.lower()}"
+        else:  # standard
+            move_str = f"{color}{piece}{from_sq}{to_sq}"
+            if promotion:
+                move_str += f"={promotion}"
+        
+        return move_str
+    
     def _convert_board_to_moves(self, board) -> str:
-        """Convert board move history to model input format."""
+        """
+        Convert board move history to model input format.
+        
+        Automatically detects the tokenizer's expected format and outputs
+        moves accordingly. Supports any tokenization strategy.
+        """
         moves = []
         temp_board = self.chess.Board()
+        fmt = self._detect_tokenizer_format()
         
         for move in board.move_stack:
             # Get piece and color
@@ -103,29 +201,44 @@ class ChessEvaluator:
             from_sq = self.chess.square_name(move.from_square)
             to_sq = self.chess.square_name(move.to_square)
             
-            move_str = f"{color}{piece_letter}{from_sq}{to_sq}"
-            
-            # Add promotion
+            # Get promotion piece if any
+            promo = None
             if move.promotion:
-                move_str += f"={self.chess.piece_symbol(move.promotion).upper()}"
+                promo = self.chess.piece_symbol(move.promotion).upper()
             
-            # Add capture suffix
-            if temp_board.is_capture(move):
-                move_str += "(x)"
+            # Format based on detected tokenizer format
+            move_str = self._format_move(color, piece_letter, from_sq, to_sq, promo)
             
-            # Add check/checkmate suffix
-            temp_board.push(move)
-            if temp_board.is_checkmate():
-                move_str = move_str.replace("(x)", "(x+*)") if "(x)" in move_str else move_str + "(+*)"
-            elif temp_board.is_check():
-                move_str = move_str.replace("(x)", "(x+)") if "(x)" in move_str else move_str + "(+)"
-            
-            # Handle castling
-            if piece_letter == "K" and abs(ord(from_sq[0]) - ord(to_sq[0])) > 1:
-                if to_sq[0] == 'g':  # Kingside
-                    move_str = move_str.split("(")[0] + "(o)"
-                else:  # Queenside
-                    move_str = move_str.split("(")[0] + "(O)"
+            # For standard format, add annotations (capture, check, castling)
+            if fmt == 'standard':
+                # Add capture suffix
+                if temp_board.is_capture(move):
+                    move_str += "(x)"
+                
+                # Push move to check for check/checkmate
+                temp_board.push(move)
+                
+                if temp_board.is_checkmate():
+                    if "(x)" in move_str:
+                        move_str = move_str.replace("(x)", "(x+*)")
+                    else:
+                        move_str += "(+*)"
+                elif temp_board.is_check():
+                    if "(x)" in move_str:
+                        move_str = move_str.replace("(x)", "(x+)")
+                    else:
+                        move_str += "(+)"
+                
+                # Handle castling notation
+                if piece_letter == "K":
+                    if abs(ord(from_sq[0]) - ord(to_sq[0])) > 1:
+                        if to_sq[0] == 'g':  # Kingside
+                            move_str = move_str.split("(")[0] + "(o)"
+                        else:  # Queenside
+                            move_str = move_str.split("(")[0] + "(O)"
+            else:
+                # For non-standard formats, just push the move
+                temp_board.push(move)
             
             moves.append(move_str)
         
@@ -160,6 +273,65 @@ class ChessEvaluator:
         
         return False
 
+    def _extract_uci_move(self, text: str) -> Optional[str]:
+        """
+        Extract a UCI move from generated text using pattern matching.
+        
+        This generic method works with any tokenization format by finding
+        chess square patterns ([a-h][1-8]) in the output.
+        
+        Supported formats include:
+        - Standard: "WPe2e4" -> "e2e4"
+        - Decomposed: "WP e2_f e4_t" -> "e2e4"
+        - Pure UCI: "e2e4" -> "e2e4"
+        - With separators: "e2-e4", "e2 e4" -> "e2e4"
+        - With promotion: "e7e8=Q", "e7e8q" -> "e7e8q"
+        
+        Args:
+            text: The generated text containing a move.
+        
+        Returns:
+            UCI move string (e.g., "e2e4", "e7e8q") or None if not found.
+        """
+        if not text:
+            return None
+        
+        # Find all squares in the text
+        squares = re.findall(self.SQUARE_PATTERN, text)
+        
+        if len(squares) < 2:
+            return None
+        
+        # Take the first two squares as from and to
+        from_sq, to_sq = squares[0], squares[1]
+        uci_move = from_sq + to_sq
+        
+        # Check for promotion (letter after to_square)
+        # Look for patterns like "=Q", "=q", or just "q" after the to_square
+        to_sq_idx = text.find(to_sq)
+        if to_sq_idx != -1:
+            remaining = text[to_sq_idx + 2:to_sq_idx + 5]  # Check next few chars
+            promo_match = re.search(r'[=]?([qrbnQRBN])', remaining)
+            if promo_match:
+                uci_move += promo_match.group(1).lower()
+        
+        return uci_move
+
+    def _has_complete_move(self, text: str) -> bool:
+        """
+        Check if the generated text contains a complete move.
+        
+        A complete move has at least two valid chess squares.
+        
+        Args:
+            text: The generated text so far.
+        
+        Returns:
+            True if text contains at least two squares.
+        """
+        squares = re.findall(self.SQUARE_PATTERN, text)
+        return len(squares) >= 2
+
     def _generate_move_tokens(
         self,
         input_ids: torch.Tensor,
@@ -168,11 +340,12 @@ class ChessEvaluator:
         max_tokens: int = 20,
     ) -> str:
         """
-        Generate tokens until a separator (whitespace/EOS) is encountered.
+        Generate tokens until a complete move is detected or separator is hit.
         
-        This method supports different tokenization strategies:
-        - For move-level tokenizers: generates one token (the full move)
-        - For character/subword tokenizers: generates until whitespace
+        This method is tokenizer-agnostic and stops when:
+        - A separator token (whitespace/EOS) is encountered
+        - Two chess squares have been generated (complete move)
+        - max_tokens limit is reached
         
         Args:
             input_ids: The input token IDs.
@@ -181,10 +354,11 @@ class ChessEvaluator:
             max_tokens: Maximum tokens to generate for a single move.
         
         Returns:
-            The generated move string (without trailing separator).
+            The generated move string.
         """
         generated_tokens = []
         current_ids = input_ids.clone()
+        accumulated_text = ""
         
         for _ in range(max_tokens):
             with torch.no_grad():
@@ -193,31 +367,47 @@ class ChessEvaluator:
                 
                 # Apply top-k filtering
                 if top_k > 0:
-                    top_k_values = torch.topk(logits, min(top_k, logits.size(-1)))[0]
-                    indices_to_remove = logits < top_k_values[..., -1, None]
+                    top_k_vals = torch.topk(logits, min(top_k, logits.size(-1)))
+                    indices_to_remove = logits < top_k_vals[0][..., -1, None]
                     logits[indices_to_remove] = float("-inf")
                 
                 # Sample
                 probs = torch.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
+                next_token = torch.multinomial(probs, num_samples=1)
             
             # Decode the token
             token_str = self.tokenizer.decode(next_token[0])
             
             # Check if this is a separator token
             if self._is_separator_token(token_str):
-                break
+                # If we already have a complete move, stop
+                if self._has_complete_move(accumulated_text):
+                    break
+                # Otherwise, if it's EOS, we should also stop
+                if hasattr(self.tokenizer, 'eos_token'):
+                    if token_str == self.tokenizer.eos_token:
+                        break
+                # For whitespace separators, only stop if we have content
+                if accumulated_text:
+                    break
             
-            generated_tokens.append(next_token[0])  # Store [1] tensor
-            
-            # Append to input for next iteration (next_token is already [1, 1])
+            generated_tokens.append(next_token[0])
             current_ids = torch.cat([current_ids, next_token], dim=-1)
+            accumulated_text += token_str
             
-            # For move-level tokenizers, a single non-separator token is the full move
-            # We can detect this by checking if the token looks like a complete move
-            # (starts with W or B, has enough characters for a move)
-            if len(token_str) >= 6 and token_str[0] in "WB":
-                break
+            # Stop if we have a complete move (two squares found)
+            if self._has_complete_move(accumulated_text):
+                # Check if this might be a promotion - peek for one more token
+                # if the move is to rank 1 or 8
+                squares = re.findall(self.SQUARE_PATTERN, accumulated_text)
+                if len(squares) >= 2:
+                    to_sq = squares[1]
+                    if to_sq[1] in '18':  # Potential promotion
+                        # Allow one more iteration to capture promotion piece
+                        if len(generated_tokens) > 3:  # Already have enough
+                            break
+                    else:
+                        break
         
         # Decode all generated tokens together
         if generated_tokens:
@@ -236,11 +426,15 @@ class ChessEvaluator:
         """
         Get the model's next move prediction.
         
-        This method generates tokens until a separator (whitespace/EOS) is produced,
-        allowing it to work with different tokenization strategies:
-        - Move-level tokenizers: each move is a single token
-        - Character-level tokenizers: moves are generated character by character
-        - BPE/subword tokenizers: moves may be split into subwords
+        This method is tokenizer-agnostic. It generates tokens and extracts
+        UCI moves using pattern matching on chess squares.
+        
+        Works with any tokenization format:
+        - Move-level: "WPe2e4" -> e2e4
+        - Decomposed: "WP e2_f e4_t" -> e2e4
+        - Pure UCI: "e2e4" -> e2e4
+        - Character-level: "e" "2" "e" "4" -> e2e4
+        - BPE/subword: "e2" "e4" -> e2e4
         
         Returns:
             Tuple of (UCI move string, number of retries used).
@@ -257,32 +451,26 @@ class ChessEvaluator:
             input_text = self.tokenizer.bos_token + " " + moves_str
         
         # Tokenize
-        max_len = getattr(self.model.config, 'n_ctx', None) or getattr(self.model.config, 'max_position_embeddings', 256)
         inputs = self.tokenizer(
             input_text,
             return_tensors="pt",
             truncation=True,
-            max_length=max_len - 10,  # Leave room for generated tokens
+            max_length=self.model.config.n_ctx - 10,
         ).to(self.device)
         
         # Try to generate a legal move
         for retry in range(self.max_retries):
-            # Generate tokens until separator
-            move_token = self._generate_move_tokens(
+            # Generate tokens until we have a move
+            move_text = self._generate_move_tokens(
                 inputs["input_ids"],
                 temperature=temperature,
                 top_k=top_k,
             )
             
-            # Convert to UCI
-            if len(move_token) >= 6:
-                uci_move = move_token[2:4] + move_token[4:6]
-                
-                # Handle promotion
-                if "=" in move_token:
-                    promo_idx = move_token.index("=")
-                    uci_move += move_token[promo_idx + 1].lower()
-                
+            # Extract UCI move using generic pattern matching
+            uci_move = self._extract_uci_move(move_text)
+            
+            if uci_move:
                 try:
                     move = self.chess.Move.from_uci(uci_move)
                     if move in board.legal_moves:
@@ -390,7 +578,6 @@ class ChessEvaluator:
         n_positions: int = 1000,
         temperature: float = 0.7,
         verbose: bool = True,
-        seed: int = 42,
     ) -> dict:
         """
         Evaluate the model's ability to generate legal moves.
@@ -402,14 +589,10 @@ class ChessEvaluator:
             n_positions: Number of positions to test.
             temperature: Sampling temperature.
             verbose: Whether to print progress.
-            seed: Random seed for reproducibility.
         
         Returns:
             Dictionary with legal move statistics.
         """
-        # Set seed for deterministic evaluation
-        random.seed(seed)
-        
         results = {
             "total_positions": 0,
             "legal_first_try": 0,
@@ -572,72 +755,23 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     Returns:
         Tuple of (model, tokenizer).
     """
-    import json
-    from huggingface_hub import hf_hub_download
-    from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     
-    # Import custom classes
-    try:
-        from src.model import ChessConfig, ChessForCausalLM
-        from src.tokenizer import ChessTokenizer
-    except ImportError:
-        from .model import ChessConfig, ChessForCausalLM
-        from .tokenizer import ChessTokenizer
+    # Import to register custom classes
+    from src.model import ChessConfig, ChessForCausalLM
+    from src.tokenizer import ChessTokenizer
     
-    # Register BEFORE any from_pretrained calls
-    try:
-        AutoConfig.register("chess_transformer", ChessConfig)
-    except ValueError:
-        pass
-    try:
-        AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
-    except ValueError:
-        pass
-    
-    print(f"Loading model {model_id}...")
-    
-    # Download and load config manually to avoid transformers auto-detection issues
-    config_path = hf_hub_download(repo_id=model_id, filename="config.json")
-    with open(config_path, "r") as f:
-        config_dict = json.load(f)
-    
-    # Remove fields that are not in ChessConfig to avoid unexpected kwargs
-    config_dict.pop("model_type", None)
-    config_dict.pop("architectures", None)
-    config_dict.pop("transformers_version", None)
-    config_dict.pop("dtype", None)
-    config_dict.pop("torch_dtype", None)
-    
-    config = ChessConfig(**config_dict)
-    
-    # Load model weights with our config
-    model = ChessForCausalLM.from_pretrained(
-        model_id,
-        config=config,
-        device_map=device,
-    )
-    
-    # Load tokenizer - try to find vocab.json, else build default
+    # Try loading with custom tokenizer first, fall back to AutoTokenizer
     try:
         tokenizer = ChessTokenizer.from_pretrained(model_id)
-    except Exception as e:
-        print(f"ChessTokenizer.from_pretrained failed: {e}")
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-        except Exception as e2:
-            print(f"AutoTokenizer also failed: {e2}")
-            print("Creating default tokenizer with vocab_size from config...")
-            # Create a minimal tokenizer with just the vocab size
-            tokenizer = ChessTokenizer()
-            # Ensure vocab size matches model
-            if hasattr(config, 'vocab_size'):
-                # Build a placeholder vocab of the right size
-                tokenizer._vocab = {f"[MOVE_{i}]": i for i in range(config.vocab_size)}
-                tokenizer._vocab["[PAD]"] = 0
-                tokenizer._vocab["[BOS]"] = 1
-                tokenizer._vocab["[EOS]"] = 2
-                tokenizer._vocab["[UNK]"] = 3
-                tokenizer._ids_to_tokens = {v: k for k, v in tokenizer._vocab.items()}
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        device_map=device,
+    )
     
     return model, tokenizer
 
@@ -684,21 +818,25 @@ def main():
     # Load model
     print(f"\nLoading model from: {args.model_path}")
     
-    if "/" in args.model_path and not args.model_path.startswith("."):
-        # Assume Hugging Face model ID
-        model, tokenizer = load_model_from_hub(args.model_path)
-    else:
+    import os
+    is_local_path = os.path.exists(args.model_path)
+    
+    if is_local_path:
         # Local path
         from transformers import AutoModelForCausalLM
-        try:
-            from src.tokenizer import ChessTokenizer
-            from src.model import ChessConfig, ChessForCausalLM
-        except ImportError:
-            from .tokenizer import ChessTokenizer
-            from .model import ChessConfig, ChessForCausalLM
+        from src.tokenizer import ChessTokenizer
+        from src.model import ChessConfig, ChessForCausalLM
         
         tokenizer = ChessTokenizer.from_pretrained(args.model_path)
         model = AutoModelForCausalLM.from_pretrained(args.model_path)
+    else:
+        # Assume Hugging Face model ID (or invalid path)
+        if args.model_path.startswith(".") or args.model_path.startswith("/"):
+            raise FileNotFoundError(
+                f"Local model path not found: {args.model_path}\n"
+                f"Please check that the path exists and contains model files."
+            )
+        model, tokenizer = load_model_from_hub(args.model_path)
     
     # Create evaluator
     print(f"\nSetting up evaluator...")

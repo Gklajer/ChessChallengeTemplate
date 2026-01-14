@@ -591,7 +591,13 @@ with gr.Blocks(
             The goal is to create a chess-playing language model with **under 1 million parameters**, which is roughly the number of neurons in a honey bee's brain.
             At this scale, efficiency and clever architecture choices are key! We are not targetting superhuman performance, but rather exploring how well small models can learn the rules of chess, the goal being (only) to play **legal moves**.
             
-            1. **Train your model** using the [Chess Challenge Template](https://github.com/nathanael-fijalkow/ChessChallengeTemplate)
+            0. **Clone this repository**: 
+                ```bash
+                git clone https://huggingface.co/spaces/LLM-course/Chess1MChallenge
+                ```
+                and check the `TEMPLATE_README.md` for detailed instructions.
+                        
+            1. **Train your model**
             
             2. **Push to Hugging Face Hub** using the `submit.py` script provided in the template to make sure that your model is registered correctly.
             
