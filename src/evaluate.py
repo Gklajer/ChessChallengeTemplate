@@ -578,6 +578,7 @@ class ChessEvaluator:
         n_positions: int = 1000,
         temperature: float = 0.7,
         verbose: bool = True,
+        seed: int = 42,
     ) -> dict:
         """
         Evaluate the model's ability to generate legal moves.
@@ -589,10 +590,15 @@ class ChessEvaluator:
             n_positions: Number of positions to test.
             temperature: Sampling temperature.
             verbose: Whether to print progress.
+            seed: Random seed for reproducibility.
         
         Returns:
             Dictionary with legal move statistics.
         """
+        # Set random seed for reproducibility
+        random.seed(seed)
+        torch.manual_seed(seed)
+        
         results = {
             "total_positions": 0,
             "legal_first_try": 0,
@@ -801,6 +807,10 @@ def main():
         help="Number of positions for legal move evaluation"
     )
     parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Random seed for reproducibility"
+    )
+    parser.add_argument(
         "--n_games", type=int, default=100,
         help="Number of games to play for win rate evaluation"
     )
@@ -828,7 +838,10 @@ def main():
         from src.model import ChessConfig, ChessForCausalLM
         
         tokenizer = ChessTokenizer.from_pretrained(args.model_path)
-        model = AutoModelForCausalLM.from_pretrained(args.model_path)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            device_map="auto",
+        )
     else:
         # Assume Hugging Face model ID (or invalid path)
         if args.model_path.startswith(".") or args.model_path.startswith("/"):
@@ -858,6 +871,7 @@ def main():
             n_positions=args.n_positions,
             temperature=args.temperature,
             verbose=True,
+            seed=args.seed,
         )
         
         print("\n" + "-" * 40)

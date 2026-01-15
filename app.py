@@ -13,8 +13,6 @@ less than 1M parameters! This is approximately the number of neurons of a honey 
 Leaderboard data is stored in a private HuggingFace dataset for persistence.
 """
 
-import hashlib
-import hmac
 import io
 import os
 import sys
@@ -24,17 +22,16 @@ from typing import Optional
 
 import gradio as gr
 import pandas as pd
-from fastapi import FastAPI, Request, BackgroundTasks
-
-# Create FastAPI app for webhook
-fastapi_app = FastAPI()
 
 # Configuration
 ORGANIZATION = os.environ.get("HF_ORGANIZATION", "LLM-course")
 LEADERBOARD_DATASET = os.environ.get("LEADERBOARD_DATASET", f"{ORGANIZATION}/chess-challenge-leaderboard")
 LEADERBOARD_FILENAME = "leaderboard.csv"
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Required for private dataset access
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")  # For webhook verification
+
+# Evaluation settings
+EVAL_SEED = 42
+EVAL_N_POSITIONS = 500
 
 STOCKFISH_LEVELS = {
     "Beginner (Level 0)": 0,
@@ -342,7 +339,6 @@ def evaluate_legal_moves(
     progress: gr.Progress = gr.Progress(),
 ) -> str:
     """Evaluate a model's legal move generation."""
-    n_positions = 500  # Fixed number of positions
     try:
         import sys
         sys.path.insert(0, str(Path(__file__).parent))
@@ -359,8 +355,12 @@ def evaluate_legal_moves(
             stockfish_level=1,  # Not used for legal move eval
         )
         
-        progress(0.2, desc=f"Testing {n_positions} positions...")
-        results = evaluator.evaluate_legal_moves(n_positions=n_positions, verbose=False)
+        progress(0.2, desc=f"Testing {EVAL_N_POSITIONS} positions...")
+        results = evaluator.evaluate_legal_moves(
+            n_positions=EVAL_N_POSITIONS,
+            verbose=False,
+            seed=EVAL_SEED,
+        )
         
         # Extract user_id from model's README (submitted by field)
         user_id = get_model_submitter(model_id)
@@ -756,102 +756,5 @@ with gr.Blocks(
             refresh_btn.click(refresh_leaderboard, outputs=leaderboard_html)
 
 
-# =============================================================================
-# WEBHOOK HANDLERS FOR AUTOMATIC EVALUATION
-# =============================================================================
-
-def verify_webhook_secret(secret: str) -> bool:
-    """Verify the webhook secret from Hugging Face."""
-    if not WEBHOOK_SECRET:
-        print("WEBHOOK_SECRET not set - skipping verification")
-        return True
-    return hmac.compare_digest(WEBHOOK_SECRET, secret)
-
-
-def run_auto_evaluation(model_id: str):
-    """Run model evaluation in background after webhook trigger."""
-    try:
-        print(f"🚀 Auto-evaluating new model: {model_id}")
-        
-        # Import evaluation functions
-        sys.path.insert(0, str(Path(__file__).parent))
-        from src.evaluate import ChessEvaluator, load_model_from_hub
-        
-        # Load model
-        model, tokenizer = load_model_from_hub(model_id)
-        
-        # Run legal moves evaluation (quick first pass)
-        evaluator = ChessEvaluator(
-            model=model,
-            tokenizer=tokenizer,
-            stockfish_level=1,
-        )
-        results = evaluator.evaluate_legal_moves(n_positions=100, verbose=True)
-        
-        # Update leaderboard
-        leaderboard = load_leaderboard()
-        entry = next((e for e in leaderboard if e["model_id"] == model_id), None)
-        if entry is None:
-            entry = {"model_id": model_id}
-            leaderboard.append(entry)
-        
-        entry.update({
-            "legal_rate": results.get("legal_rate_with_retry", 0),
-            "legal_rate_first_try": results.get("legal_rate_first_try", 0),
-            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        })
-        
-        save_leaderboard(leaderboard)
-        print(f"Auto-evaluation complete for {model_id}: legal_rate={results.get('legal_rate_with_retry', 0):.1%}")
-        
-    except Exception as e:
-        print(f"Auto-evaluation failed for {model_id}: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-@fastapi_app.post("/webhook")
-async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
-    """Handle incoming webhooks from Hugging Face."""
-    secret = request.headers.get("X-Webhook-Secret", "")
-    
-    # Verify secret
-    if not verify_webhook_secret(secret):
-        print("Webhook secret verification failed")
-        return {"error": "Invalid secret"}, 403
-    
-    data = await request.json()
-    event = data.get("event", {})
-    event_type = event.get("action")
-    repo = data.get("repo", {})
-    repo_type = repo.get("type")
-    repo_name = repo.get("name")
-    
-    print(f"📥 Webhook received: {event_type} for {repo_type}/{repo_name}")
-    
-    # Only process model creation/updates in our organization
-    if repo_type == "model" and repo_name and repo_name.startswith(f"{ORGANIZATION}/"):
-        if event_type in ["create", "update"]:
-            # Check if it's a chess model
-            if "chess" in repo_name.lower():
-                print(f"Queuing evaluation for chess model: {repo_name}")
-                background_tasks.add_task(run_auto_evaluation, repo_name)
-                return {"status": "evaluation_queued", "model": repo_name}
-            else:
-                print(f"⏭️ Skipping non-chess model: {repo_name}")
-    
-    return {"status": "ignored"}
-
-
-@fastapi_app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "organization": ORGANIZATION}
-
-
-# Mount Gradio app to FastAPI
-fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
-
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860)
