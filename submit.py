@@ -78,6 +78,10 @@ def main():
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
 
+        # Register tokenizer for AutoTokenizer so it can be loaded with trust_remote_code=True
+        # This adds the 'auto_map' field to tokenizer_config.json
+        tokenizer.register_for_auto_class("AutoTokenizer")
+        
         # Save model and tokenizer
         model.save_pretrained(tmp_path)
         tokenizer.save_pretrained(tmp_path)

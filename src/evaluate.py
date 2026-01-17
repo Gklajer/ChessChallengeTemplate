@@ -750,13 +750,14 @@ class ChessEvaluator:
         return results
 
 
-def load_model_from_hub(model_id: str, device: str = "auto"):
+def load_model_from_hub(model_id: str, device: str = "auto", verbose: bool = True):
     """
     Load a model from the Hugging Face Hub.
     
     Args:
         model_id: Model ID on Hugging Face Hub.
         device: Device to load the model on.
+        verbose: Whether to print debug info about loaded tokenizer.
     
     Returns:
         Tuple of (model, tokenizer).
@@ -769,16 +770,30 @@ def load_model_from_hub(model_id: str, device: str = "auto"):
     
     # Try AutoTokenizer with trust_remote_code first to load custom tokenizer.py from Hub
     # Fall back to local ChessTokenizer if the model doesn't have a custom tokenizer
+    tokenizer_source = None
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    except Exception:
+        tokenizer_source = "AutoTokenizer (from Hub with trust_remote_code=True)"
+    except Exception as e:
+        if verbose:
+            print(f"   AutoTokenizer failed: {e}")
         tokenizer = ChessTokenizer.from_pretrained(model_id)
+        tokenizer_source = "ChessTokenizer (local class, vocab from Hub)"
     
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         trust_remote_code=True,
         device_map=device,
     )
+    
+    # Print debug info
+    if verbose:
+        print(f"   Tokenizer loaded via: {tokenizer_source}")
+        print(f"   Tokenizer class: {type(tokenizer).__name__}")
+        print(f"   Tokenizer vocab size: {tokenizer.vocab_size}")
+        # Check if tokenizer has custom attributes that might differ
+        if hasattr(tokenizer, '_vocab'):
+            print(f"   Tokenizer has _vocab attribute: yes ({len(tokenizer._vocab)} entries)")
     
     return model, tokenizer
 

@@ -341,12 +341,20 @@ def evaluate_legal_moves(
     """Evaluate a model's legal move generation."""
     try:
         import sys
+        import io
+        from contextlib import redirect_stdout
+        
         sys.path.insert(0, str(Path(__file__).parent))
         
         from src.evaluate import ChessEvaluator, load_model_from_hub
         
         progress(0, desc="Loading model...")
-        model, tokenizer = load_model_from_hub(model_id)
+        
+        # Capture tokenizer debug info
+        debug_output = io.StringIO()
+        with redirect_stdout(debug_output):
+            model, tokenizer = load_model_from_hub(model_id, verbose=True)
+        tokenizer_info = debug_output.getvalue()
         
         progress(0.1, desc="Setting up evaluator...")
         evaluator = ChessEvaluator(
@@ -409,6 +417,9 @@ which adds the required metadata to the README.md file.
         
         progress(1.0, desc="Done!")
         
+        # Format tokenizer info for display
+        tokenizer_debug = tokenizer_info.strip().replace("   ", "- ")
+        
         return f"""
 ## Legal Move Evaluation for {model_id.split('/')[-1]}
 
@@ -418,6 +429,11 @@ which adds the required metadata to the README.md file.
 | **Legal (1st try)** | {results['legal_first_try']} ({results['legal_rate_first_try']*100:.1f}%) |
 | **Legal (with retries)** | {results['legal_first_try'] + results['legal_with_retry']} ({results['legal_rate_with_retry']*100:.1f}%) |
 | **Always Illegal** | {results['illegal_all_retries']} ({results['illegal_rate']*100:.1f}%) |
+
+### Tokenizer Info
+```
+{tokenizer_debug}
+```
 
 ### Leaderboard Update
 {update_message}
