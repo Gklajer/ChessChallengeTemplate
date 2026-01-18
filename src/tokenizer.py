@@ -38,16 +38,18 @@ class ChessTokenizer(PreTrainedTokenizer):
     model_input_names = ["input_ids", "attention_mask"]
     vocab_files_names = {"vocab_file": "vocab.json"}
 
-    # Special tokens
-    PAD_TOKEN = "[PAD]"
-    BOS_TOKEN = "[BOS]"
-    EOS_TOKEN = "[EOS]"
-    UNK_TOKEN = "[UNK]"
+    special_tokens_map = {
+        "pad_token": "[PAD]",
+        "bos_token": "[BOS]",
+        "eos_token": "[EOS]",
+        "unk_token": "[UNK]",
+    }
+    special_tokens = list(special_tokens_map.values())
 
     def __init__(
         self,
-        vocab_file: Optional[str] = None,
-        vocab: Optional[Dict[str, int]] = None,
+        vocab_file: Optional[str | Path] = None,
+        vocab: Dict[str, int] = {},
         **kwargs,
     ):
         """
@@ -58,39 +60,28 @@ class ChessTokenizer(PreTrainedTokenizer):
             vocab: Dictionary mapping tokens to IDs (alternative to vocab_file).
             **kwargs: Additional arguments passed to PreTrainedTokenizer.
         """
-        # Initialize special tokens
-        self._pad_token = self.PAD_TOKEN
-        self._bos_token = self.BOS_TOKEN
-        self._eos_token = self.EOS_TOKEN
-        self._unk_token = self.UNK_TOKEN
+        kwargs.update(self.special_tokens_map)
 
-        # Remove any duplicate special-token entries passed through kwargs
-        # to avoid "multiple values for keyword" errors when loading from disk.
-        kwargs.pop("pad_token", None)
-        kwargs.pop("bos_token", None)
-        kwargs.pop("eos_token", None)
-        kwargs.pop("unk_token", None)
+        if vocab and vocab_file:
+            raise ValueError("Provide either vocab or vocab_file, not both.")
 
-        # Load or create vocabulary
-        if vocab is not None:
-            self._vocab = vocab
-        elif vocab_file is not None and os.path.exists(vocab_file):
-            with open(vocab_file, "r", encoding="utf-8") as f:
-                self._vocab = json.load(f)
-        else:
-            # Create a minimal vocabulary with just special tokens
-            # The full vocabulary should be built from the dataset
-            self._vocab = self._create_default_vocab()
+        vocab_file = Path(vocab_file) if vocab_file is not None else None
+
+        self._vocab = (
+            vocab
+            or (
+                json.loads(vocab_file.read_text())
+                if vocab_file is not None and vocab_file.exists() and vocab_file.is_file()
+                else {}
+            )
+            or self._create_default_vocab()
+        )
 
         # Create reverse mapping
         self._ids_to_tokens = {v: k for k, v in self._vocab.items()}
 
         # Call parent init AFTER setting up vocab
         super().__init__(
-            pad_token=self._pad_token,
-            bos_token=self._bos_token,
-            eos_token=self._eos_token,
-            unk_token=self._unk_token,
             **kwargs,
         )
 
@@ -199,16 +190,16 @@ class ChessTokenizer(PreTrainedTokenizer):
 
     def _convert_token_to_id(self, token: str) -> int:
         """Convert a token to its ID."""
-        return self._vocab.get(token, self._vocab.get(self.UNK_TOKEN, 0))
+        return self._vocab.get(token, self._vocab.get(self.special_tokens_map["unk_token"], 0))
 
     def _convert_id_to_token(self, index: int) -> str:
         """Convert an ID to its token."""
-        return self._ids_to_tokens.get(index, self.UNK_TOKEN)
+        return self._ids_to_tokens.get(index, self.special_tokens_map["unk_token"])
 
     def convert_tokens_to_string(self, tokens: List[str]) -> str:
         """Convert a list of tokens back to a string."""
         # Filter out special tokens for cleaner output
-        special = {self.PAD_TOKEN, self.BOS_TOKEN, self.EOS_TOKEN, self.UNK_TOKEN}
+        special = set(self.special_tokens_map.values())
         return " ".join(t for t in tokens if t not in special)
 
     def save_vocabulary(
