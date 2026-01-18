@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from transformers import PreTrainedTokenizer
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 
 class ChessTokenizer(PreTrainedTokenizer):
