@@ -176,7 +176,7 @@ class ChessTokenizer(PreTrainedTokenizer):
         """Return the vocabulary as a dictionary."""
         return dict(self._vocab)
 
-    def _tokenize(self, text: str) -> List[str]:
+    def _tokenize(self, text: str, **kwargs) -> List[str]:
         """
         Tokenize a string of moves into a list of tokens.
 
