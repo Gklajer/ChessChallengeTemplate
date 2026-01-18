@@ -134,7 +134,8 @@ Chess model submitted to the LLM Course Chess Challenge.
 - **Vocab size**: {tokenizer.vocab_size}
 - **Embedding dim**: {model.config.n_embd}
 - **Layers**: {model.config.n_layer}
-- **Heads**: {model.config.n_head}
+- **Heads KV**: {model.config.n_head_kv}
+- **Heads Q**: {model.config.n_head_q}
 """
         (tmp_path / "README.md").write_text(model_card)
 
