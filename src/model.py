@@ -11,15 +11,14 @@ Key components:
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PretrainedConfig, PreTrainedModel
+from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_utils import PreTrainedModel
 
 
 class ChessConfig(PretrainedConfig):
