@@ -10,22 +10,19 @@ from __future__ import annotations
 import argparse
 import os
 import warnings
-from pathlib import Path
-
-# Suppress warnings from third-party libraries (multiprocess has Python 3.14 compat issues)
-warnings.filterwarnings("ignore", message="'return' in a 'finally' block")
 
 import torch
-from transformers import (
-    Trainer,
-    TrainingArguments,
-    set_seed,
-)
+from transformers.trainer import Trainer
+from transformers.trainer_utils import set_seed
+from transformers.training_args import TrainingArguments
 
 from src.data import ChessDataCollator, create_train_val_datasets
 from src.model import ChessConfig, ChessForCausalLM
 from src.tokenizer import ChessTokenizer
 from src.utils import count_parameters, print_parameter_budget
+
+# Suppress warnings from third-party libraries (multiprocess has Python 3.14 compat issues)
+warnings.filterwarnings("ignore", message="'return' in a 'finally' block")
 
 
 def parse_args():
