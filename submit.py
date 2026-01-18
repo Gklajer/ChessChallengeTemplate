@@ -18,12 +18,16 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="Submit your chess model to Hugging Face Hub")
     parser.add_argument(
-        "--model_path", type=str, default="./my_model/final_model",
-        help="Path to your trained model directory"
+        "--model_path",
+        type=str,
+        default="./my_model/final_model",
+        help="Path to your trained model directory",
     )
     parser.add_argument(
-        "--model_name", type=str, required=True,
-        help="Name for your model on the Hub (e.g., 'my-chess-model')"
+        "--model_name",
+        type=str,
+        required=True,
+        help="Name for your model on the Hub (e.g., 'my-chess-model')",
     )
     args = parser.parse_args()
 
@@ -81,26 +85,27 @@ def main():
         # Register tokenizer for AutoTokenizer so it can be loaded with trust_remote_code=True
         # This adds the 'auto_map' field to tokenizer_config.json
         tokenizer.register_for_auto_class("AutoTokenizer")
-        
+
         # Register model for AutoModelForCausalLM so custom architectures load correctly
         # This adds the 'auto_map' field to config.json
         model.config.auto_map = {
             "AutoConfig": "model.ChessConfig",
             "AutoModelForCausalLM": "model.ChessForCausalLM",
         }
-        
+
         # Save model and tokenizer
         model.save_pretrained(tmp_path)
         tokenizer.save_pretrained(tmp_path)
-        
+
         # Copy tokenizer.py to allow loading with trust_remote_code=True
         # This ensures the custom ChessTokenizer can be loaded from the Hub
         import shutil
+
         tokenizer_src = Path(__file__).parent / "src" / "tokenizer.py"
         if tokenizer_src.exists():
             shutil.copy(tokenizer_src, tmp_path / "tokenizer.py")
             print("   Included tokenizer.py for remote loading")
-        
+
         # Copy model.py to allow loading custom model architectures with trust_remote_code=True
         # This ensures students who modify the model architecture can load their models from the Hub
         model_src = Path(__file__).parent / "src" / "model.py"
