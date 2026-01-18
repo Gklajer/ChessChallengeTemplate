@@ -213,7 +213,7 @@ class ChessTokenizer(PreTrainedTokenizer):
 
     def save_vocabulary(
         self,
-        save_directory: str,
+        save_directory: str | Path,
         filename_prefix: Optional[str] = None,
     ) -> tuple:
         """
@@ -226,17 +226,15 @@ class ChessTokenizer(PreTrainedTokenizer):
         Returns:
             Tuple containing the path to the saved vocabulary file.
         """
-        if not os.path.isdir(save_directory):
-            os.makedirs(save_directory, exist_ok=True)
+        save_directory = Path(save_directory)
+        if not save_directory.is_dir():
+            save_directory.mkdir(parents=True, exist_ok=True)
 
-        vocab_file = os.path.join(
-            save_directory,
-            (filename_prefix + "-" if filename_prefix else "") + "vocab.json",
-        )
+        filename_suffix = self.vocab_files_names["vocab_file"]
+        filename = f"{filename_prefix}-{filename_suffix}" if filename_prefix else filename_suffix
+        vocab_file = save_directory / filename
 
-        with open(vocab_file, "w", encoding="utf-8") as f:
-            json.dump(self._vocab, f, ensure_ascii=False, indent=2)
-
+        vocab_file.write_text(json.dumps(self._vocab, indent=2), encoding="utf-8")
         return (vocab_file,)
 
 
