@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from transformers import PreTrainedTokenizer
 
@@ -99,7 +99,7 @@ class ChessTokenizer(PreTrainedTokenizer):
     @classmethod
     def build_vocab_from_iterator(
         cls,
-        iterator,
+        iterator: Iterable[str],
         min_frequency: int = 1,
     ) -> "ChessTokenizer":
         """
