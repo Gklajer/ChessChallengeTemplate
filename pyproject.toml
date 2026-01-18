@@ -39,6 +39,7 @@ dev = [
     "pytest>=7.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "ty>=0.0.12",
 ]
 eval = [
     "stockfish>=3.28.0",
