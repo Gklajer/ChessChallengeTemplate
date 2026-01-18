@@ -68,8 +68,8 @@ class ChessDataset(Dataset):
     def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        game = self.data[idx][self.column]
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        game = self.data[index][self.column]
 
         # Prepend BOS token for proper language modeling
         game_with_bos = self.tokenizer.bos_token + " " + game
