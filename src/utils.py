@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, Optional
 
 import torch.nn as nn
+from tabulate import tabulate
 
 if TYPE_CHECKING:
     from src.model import ChessConfig
@@ -66,31 +67,33 @@ def estimate_parameters(config: "ChessConfig") -> Dict[str, int]:
     """
     V = config.vocab_size
     d = config.n_embd
+    dq, dk, dv = config.dim_q, config.dim_k, config.dim_v
+    do = config.n_head_q * config.dim_head_v
     L = config.n_layer
-    n_ctx = config.n_ctx
     n_inner = config.n_inner
 
+    # 1. Attention Parameters (Per Layer)
+    # Projections for Q, K, V + the final output projection
+    att_per_layer = (d + 1) * (dq + dk + dv) + (do + 1) * d
+
+    # 2. Feed-Forward Parameters (Per Layer)
+    # Typically: Linear(d, n_inner) then Linear(n_inner, d)
+    # We include weights and biases (2 * d * n_inner) + (d + n_inner)
+    # Using your original logic of 2 * d * n_inner for simplicity:
+    ffw_per_layer = (d + 1) * n_inner + (n_inner + 1) * d
+
+    # 3. LayerNorm and Embeddings
+    ln_per_layer = 4 * d  # 2 LayerNorms per block
+    token_emb = V * d
+
     estimates = {
-        "token_embeddings": V * d,
-        "position_embeddings": n_ctx * d,
-        "attention_qkv_per_layer": 3 * d * d,
-        "attention_proj_per_layer": d * d,
-        "ffn_per_layer": 2 * d * n_inner,
-        "layernorm_per_layer": 4 * d,  # 2 LayerNorms, each with weight and bias
-        "final_layernorm": 2 * d,
+        "embeddings": token_emb,
+        "attention_total": L * att_per_layer,
+        "ffw_total": L * ffw_per_layer,
+        "layernorm_total": (L * ln_per_layer) + (2 * d),  # layers + final LN
     }
 
-    # Calculate totals
-    per_layer = (
-        estimates["attention_qkv_per_layer"]
-        + estimates["attention_proj_per_layer"]
-        + estimates["ffn_per_layer"]
-        + estimates["layernorm_per_layer"]
-    )
-
-    estimates["total_transformer_layers"] = L * per_layer
-
-    # LM head (tied with embeddings by default)
+    # LM head logic
     if config.tie_weights:
         estimates["lm_head"] = 0
         estimates["lm_head_note"] = "Tied with token embeddings"
@@ -98,15 +101,29 @@ def estimate_parameters(config: "ChessConfig") -> Dict[str, int]:
         estimates["lm_head"] = V * d
 
     # Grand total
-    estimates["total"] = (
-        estimates["token_embeddings"]
-        + estimates["position_embeddings"]
-        + estimates["total_transformer_layers"]
-        + estimates["final_layernorm"]
-        + estimates["lm_head"]
+    estimates["total"] = sum(
+        [
+            estimates["embeddings"],
+            estimates["attention_total"],
+            estimates["ffw_total"],
+            estimates["layernorm_total"],
+            estimates["lm_head"],
+        ]
     )
 
     return estimates
+
+
+def fmt_params(num: float) -> str:
+    """
+    Formats to 3 sig-digits AND ensures fixed width for perfect alignment.
+    Output is always 5 or 6 chars aligned right.
+    """
+    for unit in ["", "K", "M", "B", "T"]:
+        if abs(num) < 999.5:
+            return f"{num:.0f}{unit}"
+        num /= 1000.0
+    return f"{num:.0f}P"
 
 
 def print_parameter_budget(config: "ChessConfig", limit: int = 1_000_000) -> None:
@@ -117,43 +134,33 @@ def print_parameter_budget(config: "ChessConfig", limit: int = 1_000_000) -> Non
         config: Model configuration.
         limit: Parameter limit to compare against.
     """
-    estimates = estimate_parameters(config)
+    est = estimate_parameters(config)
+    total = est["total"]
 
-    print("=" * 60)
-    print("PARAMETER BUDGET ANALYSIS")
-    print("=" * 60)
-    print(f"\nConfiguration:")
-    print(f"  vocab_size (V) = {config.vocab_size}")
-    print(f"  n_embd (d)     = {config.n_embd}")
-    print(f"  n_layer (L)    = {config.n_layer}")
-    print(f"  n_head         = {config.n_head}")
-    print(f"  n_ctx          = {config.n_ctx}")
-    print(f"  n_inner        = {config.n_inner}")
-    print(f"  tie_weights    = {config.tie_weights}")
+    def get_pct(val):
+        return f"{(val / total) * 100:.1f}%"
 
-    print(f"\nParameter Breakdown:")
-    print(f"  Token Embeddings:    {estimates['token_embeddings']:>10,}")
-    print(f"  Position Embeddings: {estimates['position_embeddings']:>10,}")
-    print(f"  Transformer Layers:  {estimates['total_transformer_layers']:>10,}")
-    print(f"  Final LayerNorm:     {estimates['final_layernorm']:>10,}")
+    table_data = [
+        ["Token Embeddings", fmt_params(est["embeddings"]), get_pct(est["embeddings"])],
+        ["Attention (Total)", fmt_params(est["attention_total"]), get_pct(est["attention_total"])],
+        ["Feed-Forward (Total)", fmt_params(est["ffw_total"]), get_pct(est["ffw_total"])],
+        ["LayerNorms", fmt_params(est["layernorm_total"]), get_pct(est["layernorm_total"])],
+        [
+            "LM Head",
+            "(tied)" if config.tie_weights else fmt_params(est["lm_head"]),
+            "0.0%" if config.tie_weights else get_pct(est["lm_head"]),
+        ],
+    ]
 
-    if config.tie_weights:
-        print(f"  LM Head:             {'(tied)':>10}")
-    else:
-        print(f"  LM Head:             {estimates['lm_head']:>10,}")
-
-    print(f"  " + "-" * 30)
-    print(f"  TOTAL:               {estimates['total']:>10,}")
-
-    print(f"\nBudget Status:")
-    print(f"  Limit:    {limit:>10,}")
-    print(f"  Used:     {estimates['total']:>10,}")
-    print(f"  Remaining:{limit - estimates['total']:>10,}")
-
-    if estimates["total"] <= limit:
-        print(f"\n Within budget! ({estimates['total'] / limit * 100:.1f}% used)")
-    else:
-        print(f"\n OVER BUDGET by {estimates['total'] - limit:,} parameters!")
+    print("\n### Parameter Budget Analysis")
+    print(
+        tabulate(
+            table_data,
+            headers=["Component", "Parameters", "% of Total"],
+            tablefmt="rounded_grid",
+            stralign="right",
+        )
+    )
 
     print("=" * 60)
 

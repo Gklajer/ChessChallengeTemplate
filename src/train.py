@@ -20,6 +20,7 @@ from src.data import ChessDataCollator, create_train_val_datasets
 from src.model import ChessConfig, ChessForCausalLM
 from src.tokenizer import ChessTokenizer
 from src.utils import count_parameters, print_parameter_budget
+from utils import fmt_params
 
 # Suppress warnings from third-party libraries (multiprocess has Python 3.14 compat issues)
 warnings.filterwarnings("ignore", message="'return' in a 'finally' block")
@@ -32,7 +33,10 @@ def parse_args():
     # Model arguments
     parser.add_argument("--n_embd", type=int, default=128, help="Embedding dimension")
     parser.add_argument("--n_layer", type=int, default=4, help="Number of transformer layers")
-    parser.add_argument("--n_head", type=int, default=4, help="Number of attention heads")
+    parser.add_argument("--n_head_kv", type=int, default=5, help="Number of attention heads")
+    parser.add_argument(
+        "--n_head_q_per_kv", type=int, default=1, help="Number of query heads per key-value head"
+    )
     parser.add_argument("--n_ctx", type=int, default=256, help="Maximum context length")
     parser.add_argument(
         "--n_inner",
@@ -117,7 +121,8 @@ def main():
         vocab_size=actual_vocab_size,
         n_embd=args.n_embd,
         n_layer=args.n_layer,
-        n_head=args.n_head,
+        n_head_kv=args.n_head_kv,
+        n_head_q_per_kv=args.n_head_q_per_kv,
         n_ctx=args.n_ctx,
         n_inner=args.n_inner,
         dropout=args.dropout,
@@ -126,12 +131,19 @@ def main():
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
     )
+    print(config)
 
     # Print parameter budget
+    print()
+    print("=" * 60)
+    print("PARAMETER BUDGET ANALYSIS")
+    print("=" * 60)
+
     print_parameter_budget(config)
 
     # Create model
     print("\nCreating model...")
+
     model = ChessForCausalLM(config)
     n_params = count_parameters(model)
     print(f"   Total parameters: {n_params:,}")
@@ -150,8 +162,8 @@ def main():
         train_samples=args.max_train_samples,
         val_samples=args.val_samples,
     )
-    print(f"   Training samples: {len(train_dataset):,}")
-    print(f"   Validation samples: {len(val_dataset):,}")
+    print(f"Training samples: {fmt_params(len(train_dataset))}")
+    print(f"Validation samples: {fmt_params(len(val_dataset))}")
 
     # Create data collator
     data_collator = ChessDataCollator(tokenizer, max_length=args.n_ctx)

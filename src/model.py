@@ -11,6 +11,7 @@ Key components:
 
 from __future__ import annotations
 
+from pprint import pformat
 from typing import Optional, Tuple, Union
 
 import torch
@@ -52,14 +53,18 @@ class ChessConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size: int = 1200,
-        n_embd: int = 128,
-        n_layer: int = 6,
-        n_head: int = 4,
-        n_ctx: int = 256,
+        n_embd: int = 256,
+        n_layer: int = 10,
+        n_head_kv: int = 8,
+        n_head_q_per_kv: int = 2,
+        dim_head_qk: int = 32,
+        dim_head_v: Optional[int] = None,
+        n_ctx: int = 1024,
         n_inner: Optional[int] = None,
         dropout: float = 0.1,
         layer_norm_epsilon: float = 1e-5,
         tie_weights: bool = True,
+        rope_theta: float = 1e4,
         pad_token_id: int = 0,
         bos_token_id: int = 1,
         eos_token_id: int = 2,
@@ -72,17 +77,57 @@ class ChessConfig(PretrainedConfig):
             **kwargs,
         )
 
+        self.dim_head_qk = dim_head_qk
+        self.dim_head_v = dim_head_v or dim_head_qk
+
+        self.n_head_kv = n_head_kv
+        self.n_head_q_per_kv = n_head_q_per_kv
+
         self.vocab_size = vocab_size
         self.n_embd = n_embd
         self.n_layer = n_layer
-        self.n_head = n_head
+        self.n_head_kv = n_head_kv
         self.n_ctx = n_ctx
         self.n_inner = n_inner if n_inner is not None else 3 * n_embd  # Reduced from 4x to 3x
         self.dropout = dropout
         self.layer_norm_epsilon = layer_norm_epsilon
         self.tie_weights = tie_weights
+        self.rope_theta = rope_theta
         # Inform HF base class about tying behavior
         self.tie_word_embeddings = bool(tie_weights)
+
+    @property
+    def dim_q(self):
+        return self.n_head_q * self.dim_head_qk
+
+    @property
+    def dim_k(self):
+        return self.n_head_kv * self.dim_head_qk
+
+    @property
+    def dim_v(self):
+        return self.n_head_kv * self.dim_head_v
+
+    @property
+    def n_head_q(self):
+        return self.n_head_q_per_kv * self.n_head_kv
+
+    def __repr__(self):
+        cls = self.__class__.__name__
+        fields = self.to_dict()
+        return f"{cls}(\n{pformat(fields, indent=2)}\n)"
+
+    __str__ = __repr__
+
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Applies rotary embeddings to input tensor x."""
+    # Reshape x to complex numbers
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    freqs_cis = freqs_cis.view(1, x.size(1), 1, -1)
+    # Perform rotation in complex space
+    x_rotated = torch.view_as_real(x_complex * freqs_cis).flatten(3)
+    return x_rotated.type_as(x)
 
 
 class MultiHeadAttention(nn.Module):
@@ -93,76 +138,114 @@ class MultiHeadAttention(nn.Module):
     with causal masking for autoregressive generation.
     """
 
+    bias: torch.Tensor  # to restrict type to Tensor and not Module
+
     def __init__(self, config: ChessConfig):
         super().__init__()
 
-        assert config.n_embd % config.n_head == 0, (
-            f"n_embd ({config.n_embd}) must be divisible by n_head ({config.n_head})"
-        )
+        self._config = config
 
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.head_dim = config.n_embd // config.n_head
+        self.proj_q = nn.Linear(config.n_embd, self.dim_q)
+        self.proj_k = nn.Linear(config.n_embd, self.dim_k)
+        self.proj_v = nn.Linear(config.n_embd, self.dim_v)
 
-        # Combined QKV projection for efficiency
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
-
-        self.dropout = nn.Dropout(config.dropout)
+        self.proj_o = nn.Linear(self._n_head_q * self._dim_head_v, config.n_embd)
 
         # Causal mask (will be created on first forward pass)
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones(config.n_ctx, config.n_ctx)).view(
-                1, 1, config.n_ctx, config.n_ctx
-            ),
+            torch.ones(config.n_ctx, config.n_ctx, dtype=torch.bool)
+            .tril(diagonal=0)
+            .unsqueeze(0)
+            .unsqueeze(0),
             persistent=False,
         )
+
+    @property
+    def dim_q(self):
+        return self._config.dim_q
+
+    @property
+    def dim_k(self):
+        return self._config.dim_k
+
+    @property
+    def dim_v(self):
+        return self._config.dim_v
+
+    @property
+    def enable_gqa(self):
+        return self._n_head_q_per_kv > 1
+
+    @property
+    def dropout_p(self):
+        return self._config.dropout * self.training
+
+    @property
+    def _n_head_kv(self):
+        return self._config.n_head_kv
+
+    @property
+    def _n_head_q(self):
+        return self._config.n_head_q
+
+    @property
+    def _dim_head_qk(self):
+        return self._config.dim_head_qk
+
+    @property
+    def _dim_head_v(self):
+        return self._config.dim_head_v
+
+    @property
+    def _n_head_q_per_kv(self):
+        return self._config.n_head_q_per_kv
 
     def forward(
         self,
         x: torch.Tensor,
+        freqs_cis: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch_size, seq_len, _ = x.size()
 
         # Compute Q, K, V
-        qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.n_embd, dim=2)
+        q, k, v = (proj(x) for proj in (self.proj_q, self.proj_k, self.proj_v))
 
         # Reshape for multi-head attention
-        q = q.view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        k = k.view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        v = v.view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        q = q.unflatten(-1, (self._n_head_q, self._dim_head_qk))
+        k = k.unflatten(-1, (self._n_head_kv, self._dim_head_qk))
+        v = v.unflatten(-1, (self._n_head_kv, self._dim_head_v))
 
-        # Scaled dot-product attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        q, k = (apply_rotary_emb(x, freqs_cis) for x in (q, k))
 
-        # Apply causal mask
-        causal_mask = self.bias[:, :, :seq_len, :seq_len]
-        attn_weights = attn_weights.masked_fill(causal_mask == 0, float("-inf"))
+        q, k, v = (x.transpose(1, 2) for x in (q, k, v))
 
-        # Apply attention mask (for padding)
+        attn_mask = self.bias[..., :seq_len, :seq_len]
+
+        # merge causal mask with attention mask if provided
         if attention_mask is not None:
-            # attention_mask shape: (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            attn_weights = attn_weights.masked_fill(attention_mask == 0, float("-inf"))
+            attention_mask = (
+                attention_mask.view(batch_size, 1, 1, seq_len)
+                .expand(-1, -1, seq_len, -1)
+                .to(torch.bool)
+            )
+            attn_mask = torch.logical_or(attention_mask, attn_mask)
 
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-
-        # Apply attention to values
-        attn_output = torch.matmul(attn_weights, v)
-
-        # Reshape back
         attn_output = (
-            attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.n_embd)
+            F.scaled_dot_product_attention(
+                query=q,
+                key=k,
+                value=v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout_p,
+                enable_gqa=self.enable_gqa,
+            )
+            .transpose(1, 2)
+            .flatten(2)
         )
 
-        # Output projection
-        attn_output = self.c_proj(attn_output)
-
-        return attn_output
+        return self.proj_o(attn_output)
 
 
 class FeedForward(nn.Module):
@@ -175,14 +258,14 @@ class FeedForward(nn.Module):
     def __init__(self, config: ChessConfig):
         super().__init__()
 
-        self.c_fc = nn.Linear(config.n_embd, config.n_inner)
-        self.c_proj = nn.Linear(config.n_inner, config.n_embd)
+        self.proj_up = nn.Linear(config.n_embd, config.n_inner)
+        self.proj_down = nn.Linear(config.n_inner, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.c_fc(x)
+        x = self.proj_up(x)
         x = F.gelu(x)
-        x = self.c_proj(x)
+        x = self.proj_down(x)
         x = self.dropout(x)
         return x
 
@@ -206,10 +289,11 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        freqs_cis: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         # Pre-norm attention
-        x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
+        x = x + self.attn(self.ln_1(x), freqs_cis=freqs_cis, attention_mask=attention_mask)
         # Pre-norm FFN
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -242,13 +326,13 @@ class ChessForCausalLM(PreTrainedModel):
     supports_gradient_checkpointing = True
     # Suppress missing-key warning for tied lm_head when loading
     keys_to_ignore_on_load_missing = ["lm_head.weight"]
+    freqs_cis: torch.Tensor
 
     def __init__(self, config: ChessConfig):
         super().__init__(config)
 
         # Token and position embeddings
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.wpe = nn.Embedding(config.n_ctx, config.n_embd)
 
         self.drop = nn.Dropout(config.dropout)
 
@@ -261,6 +345,9 @@ class ChessForCausalLM(PreTrainedModel):
         # Output head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
+        freqs_cis = self._precompute_freqs_cis(config.dim_head_qk, config.n_ctx, config.rope_theta)
+        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+
         # Declare tied weights for proper serialization
         if config.tie_weights:
             self._tied_weights_keys = ["lm_head.weight"]
@@ -272,11 +359,17 @@ class ChessForCausalLM(PreTrainedModel):
         if config.tie_weights:
             self.tie_weights()
 
+    def _precompute_freqs_cis(self, dim: int, end: int, theta: float):
+        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+        t = torch.arange(end)
+        freqs = torch.outer(t, freqs).float()
+        return torch.polar(torch.ones_like(freqs), freqs)
+
     def get_input_embeddings(self) -> nn.Module:
         return self.wte
 
-    def set_input_embeddings(self, new_embeddings: nn.Module):
-        self.wte = new_embeddings
+    def set_input_embeddings(self, value: nn.Module):
+        self.wte = value
         if getattr(self.config, "tie_weights", False):
             self.tie_weights()
 
@@ -307,9 +400,8 @@ class ChessForCausalLM(PreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
+        input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         return_dict: Optional[bool] = None,
         **kwargs,
@@ -320,7 +412,6 @@ class ChessForCausalLM(PreTrainedModel):
         Args:
             input_ids: Token IDs of shape (batch_size, seq_len).
             attention_mask: Attention mask of shape (batch_size, seq_len).
-            position_ids: Position IDs of shape (batch_size, seq_len).
             labels: Labels for language modeling loss.
             return_dict: Whether to return a ModelOutput object.
 
@@ -330,20 +421,15 @@ class ChessForCausalLM(PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         batch_size, seq_len = input_ids.size()
-        device = input_ids.device
-
-        # Create position IDs if not provided
-        if position_ids is None:
-            position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
 
         # Get embeddings
-        token_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
-        hidden_states = self.drop(token_embeds + position_embeds)
+        hidden_states = self.drop(self.wte(input_ids))
+
+        freqs_cis = self.freqs_cis[:seq_len]
 
         # Pass through transformer blocks
         for block in self.h:
-            hidden_states = block(hidden_states, attention_mask=attention_mask)
+            hidden_states = block(hidden_states, freqs_cis=freqs_cis, attention_mask=attention_mask)
 
         # Final layer norm
         hidden_states = self.ln_f(hidden_states)
@@ -359,8 +445,8 @@ class ChessForCausalLM(PreTrainedModel):
             shift_labels = labels[..., 1:].contiguous()
 
             # Flatten for cross-entropy
-            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            # loss_fct = nn.CrossEntropyLoss(ignore_index=self.config.pad_token_id)
+            ignore_index = self.config.pad_token_id or -100
+            loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index)
             loss = loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
@@ -427,5 +513,4 @@ class ChessForCausalLM(PreTrainedModel):
         # Sample from the distribution
         probs = F.softmax(logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1)
-
-        return next_token.item()
+        return int(next_token.item())
