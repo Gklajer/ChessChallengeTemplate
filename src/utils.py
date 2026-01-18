@@ -195,8 +195,8 @@ def validate_move_with_chess(move: str, board_fen: Optional[str] = None) -> bool
         return False
 
     # Extract components
-    color = move[0]  # W or B
-    piece = move[1]  # P, N, B, R, Q, K
+    # color = move[0]  # W or B
+    # piece = move[1]  # P, N, B, R, Q, K
     from_sq = move[2:4]  # e.g., "e2"
     to_sq = move[4:6]  # e.g., "e4"
 
