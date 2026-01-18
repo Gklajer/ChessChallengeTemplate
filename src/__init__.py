@@ -2,18 +2,18 @@
 
 from transformers.models import AutoConfig, AutoModelForCausalLM
 
-from model import ChessConfig, ChessForCausalLM
-from tokenizer import ChessTokenizer
+from src.model import ChessConfig, ChessForCausalLM
+from src.tokenizer import ChessTokenizer
 
 
 # Lazy import for evaluate to avoid RuntimeWarning when running as module
 def __getattr__(name):
     if name == "ChessEvaluator":
-        from evaluate import ChessEvaluator
+        from src.evaluate import ChessEvaluator
 
         return ChessEvaluator
     if name == "load_model_from_hub":
-        from evaluate import load_model_from_hub
+        from src.evaluate import load_model_from_hub
 
         return load_model_from_hub
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
