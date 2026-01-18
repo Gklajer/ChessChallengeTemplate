@@ -1,5 +1,7 @@
 """Chess Challenge source module."""
 
+from transformers.models import AutoConfig, AutoModelForCausalLM
+
 from .model import ChessConfig, ChessForCausalLM
 from .tokenizer import ChessTokenizer
 
@@ -12,6 +14,11 @@ def __getattr__(name):
         from .evaluate import load_model_from_hub
         return load_model_from_hub
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Register the model with Auto classes for easy loading
+AutoConfig.register("chess_transformer", ChessConfig)
+AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
 
 __all__ = [
     "ChessConfig",

@@ -429,10 +429,3 @@ class ChessForCausalLM(PreTrainedModel):
         next_token = torch.multinomial(probs, num_samples=1)
         
         return next_token.item()
-
-
-# Register the model with Auto classes for easy loading
-from transformers import AutoConfig, AutoModelForCausalLM
-
-AutoConfig.register("chess_transformer", ChessConfig)
-AutoModelForCausalLM.register(ChessConfig, ChessForCausalLM)
