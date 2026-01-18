@@ -82,17 +82,31 @@ def main():
         # This adds the 'auto_map' field to tokenizer_config.json
         tokenizer.register_for_auto_class("AutoTokenizer")
         
+        # Register model for AutoModelForCausalLM so custom architectures load correctly
+        # This adds the 'auto_map' field to config.json
+        model.config.auto_map = {
+            "AutoConfig": "model.ChessConfig",
+            "AutoModelForCausalLM": "model.ChessForCausalLM",
+        }
+        
         # Save model and tokenizer
         model.save_pretrained(tmp_path)
         tokenizer.save_pretrained(tmp_path)
         
         # Copy tokenizer.py to allow loading with trust_remote_code=True
         # This ensures the custom ChessTokenizer can be loaded from the Hub
+        import shutil
         tokenizer_src = Path(__file__).parent / "src" / "tokenizer.py"
         if tokenizer_src.exists():
-            import shutil
             shutil.copy(tokenizer_src, tmp_path / "tokenizer.py")
             print("   Included tokenizer.py for remote loading")
+        
+        # Copy model.py to allow loading custom model architectures with trust_remote_code=True
+        # This ensures students who modify the model architecture can load their models from the Hub
+        model_src = Path(__file__).parent / "src" / "model.py"
+        if model_src.exists():
+            shutil.copy(model_src, tmp_path / "model.py")
+            print("   Included model.py for remote loading")
 
         # Create model card with submitter info
         model_card = f"""---
